@@ -1,0 +1,1604 @@
+---
+title: "Example analysis"
+output:
+  html_notebook:
+    theme: spacelab
+    toc: true
+    toc_float: true  ###settings for entire markdown
+---
+This notebook provides example code and suggestions for analyzing microbiome sequence data. You can perform similar analysis in Python using the QIIME Artifact API, but I am much more comfortable and familiar with R for any kind of data analysis and plotting. This is just a personal preference, as both programming languages and external packages can perform the same tasks. I use R because I find data manipulation with the dplyr package and plotting with the ggplot2 package to be much more intuitive than doing the same thing in Python.
+# Emily Rocks
+# Set up packages
+```{r message=FALSE, warning=FALSE}
+# required
+library(qiime2R)
+library(phyloseq)
+library(tidyverse)
+library(ggpubr)
+library(ggplot2)
+library(rstatix) 
+library(Biostrings)
+library(vegan)
+
+# optional
+library(MetBrewer) # fun color palettes
+library(RColorBrewer)
+library(paletteer)
+setwd("C:/DOE_EERE_b1052_new")
+source("scripts/Plotting_R.R")
+```
+
+
+# Read in data
+I read in the QIIME artifacts as a phyloseq object. Phyloseq is an R package that has many convenient functions built in for manipulating and analyzing microbiome data. We will use the qiime2R package to import the QIIME data directly into a phyloseq object. 
+```{r}
+ps <- qiime2R::qza_to_phyloseq(
+  features = "C:/DOE_EERE_b1052_new/qiime_io/table_dada2220.qza",
+  tree     = "C:/DOE_EERE_b1052_new/qiime_io/rooted_tree.qza",
+  taxonomy = "C:/DOE_EERE_b1052_new/qiime_io/taxonomy.qza",
+  metadata = "C:/DOE_EERE_b1052_new/qiime_io/16sEM_metadata_050925.txt"
+)
+
+```
+
+
+
+# Basic filtering and parsing
+I will do a bit of manipulation using phyloseq functions, then we will use the suite of tidyverse packages to do more data manipulation. Let's start with getting relative abundance data.
+
+```{r}
+# remove Mitochondria and Chloroplasts 
+ps_filt <- phyloseq::subset_taxa(ps, ! Family %in% c("Mitochondria", "Chloroplast"))
+
+# remove unclassified sequences (only keep bacteria)
+ps_filt <- phyloseq::subset_taxa(ps, Kingdom != "Unassigned")
+
+# relative abundance (erases the counts and keeps as percentage)
+ps_rel <- phyloseq::transform_sample_counts(ps_filt, function(x) x*100/sum(x))
+
+```
+
+
+
+This chunk saves the taxonomy, metadata, and count tables as data frames. In these tables, each row is a unique ASV. The pipe operator %>% comes from the dplyr packages. 
+
+```{r}
+taxonomy <- as.data.frame(as.matrix(ps_rel@tax_table)) %>% 
+  rownames_to_column(var = "seq") # change the ASV ID to a column, not a row name
+
+head(taxonomy)
+
+metadata <- as.data.frame(as.matrix(ps_rel@sam_data)) %>% 
+  rownames_to_column(var = "sample")
+
+head(metadata)
+
+table_rel <- as.data.frame(as.matrix(ps_rel@otu_table)) %>% 
+  rownames_to_column(var = "seq")
+
+head(table_rel)
+```
+
+This chunk manipulates the relative abundance table and combines it with the taxonomy table. We used the pivot_longer function to make this into a "long" dataframe, which is the desired format for using ggplot2. Read a bit more about long format here: http://eriqande.github.io/rep-res-web/lectures/ggplot_2_reshape_facets_stats.html. The long format will seem very chaotic, but I promise it will be extremely useful for plotting and data analysis tasks going forward.
+
+```{r}
+
+table_rel <- table_rel %>% 
+  pivot_longer(cols = !seq, names_to = "sample", values_to = "rel_ab") %>% # make a "long" dataframe
+  left_join(taxonomy, join_by(seq)) %>% # join taxonomy by the sequence ID
+  left_join(metadata, join_by(sample)) # join metadata by the sample ID
+table_rel$day <- as.numeric(table_rel$day)
+
+head(table_rel)
+
+```
+
+
+```{r}
+my_plot<-table_rel %>%
+#  filter(Genus =="Ca_Accumulibacter")%>%
+#  filter(Genus %in% c("Ca_Accumulibacter", "Ca_Competibacter")) %>%
+filter(Genus %in% c("Ca_Accumulibacter","Tetrasphaera","Dechloromonas", "Ca_Obscuribacter","Halomonas",  "Ca_Competibacter","Defluviicoccus","Ca_Contendobacter","Propionivibrio", "Micropruina", "Dokdonella", "Thauera", "Taibaiella", "Zoogloea")) %>%
+mutate(Genus=factor(Genus,levels=c("Ca_Accumulibacter", "Ca_Obscuribacter","Dechloromonas","Tetrasphaera","Halomonas",  "Ca_Competibacter","Ca_Contendobacter","Defluviicoccus", "Micropruina","Propionivibrio", "Dokdonella", "Thauera", "Taibaiella", "Zoogloea")))%>%
+ggplot(data=., aes(x=day, y=rel_ab, fill= Genus)) +
+ labs(y= "relative abundance", x = "day")+
+  geom_bar(stat="identity")+
+  theme_classic() +
+  scale_fill +
+ phase_lines +
+  annotate("text", x=60, y=80, label="Acclimation", color="red") +
+  annotate("text", x=150, y=80, label="I", color="red") +
+  annotate("text", x=210, y=80, label="II", color="red") +
+  annotate("text", x=272, y=80, label="III", color="red") +
+  annotate("text", x=350, y=80, label="IV", color="red") +
+  annotate("text", x=430, y=80, label="V", color="red")
+
+#  theme(legend.position = "none")
+
+print(my_plot)
+#ggsave("C:/DOE_EERE_b1052_new/Plots/my_plot.pdf", plot = my_plot, width = 11, height = 8, units = "in")
+
+
+```
+#abundance
+```{r}
+# Define the target genera
+target_genera <- c("Ca_Accumulibacter", "Tetrasphaera", "Dechloromonas", 
+                   "Ca_Obscuribacter", "Halomonas", "Ca_Competibacter", 
+                   "Defluviicoccus", "Ca_Contendobacter", "Propionivibrio", 
+                   "Micropruina", "Dokdonella", "Thauera", "Taibaiella", "Zoogloea", "Pseudoxanthomonas", "Rhodobacter","Nitrotoga", "Nitrospira")
+
+# Choose the days of interest
+days_of_interest <- c(2, 120,183,224,301,384,457)
+
+# Filter for target genera on specified days and get top 10 per day
+top_target_genera_by_day <- table_rel %>%
+  filter(day %in% days_of_interest,
+         Genus %in% target_genera) %>%
+  group_by(day, Genus) %>%
+  summarise(rel_abundance = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(day) %>%
+  slice_max(rel_abundance, n = 10) %>%
+  arrange(day, desc(rel_abundance))
+
+# Print the result
+print(top_target_genera_by_day)
+
+```
+```{r}
+
+# Filter for each day of phase 
+top10_each_day <- table_rel %>%
+  filter(day %in% c(2, 120,183,224,301,384,457) ) %>%                            # Filter for day 2
+  group_by(day, Genus) %>%                             # Group by Genus
+  summarise(total_abundance = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>% # Sum relative abundance
+  group_by(day) %>%
+  slice_max(total_abundance, n = 10)
+
+print(top10_each_day)
+
+
+```
+
+
+#do this on phylum level 
+```{r}
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# Filter valid stages and summarize abundance
+phylum_abundance_by_stage <- table_rel %>%
+  filter(!is.na(Stage)) %>%
+  group_by(Stage, Phylum, day) %>%
+  summarise(daily_sum = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Stage, Phylum) %>%
+  summarise(mean_abundance = mean(daily_sum), .groups = "drop")
+
+
+top_phyla_by_stage <- table_rel %>%
+  filter(!is.na(Stage)) %>%
+  group_by(Stage, Phylum, day) %>%
+  summarise(daily_abundance = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Stage, Phylum) %>%
+  summarise(mean_abundance = mean(daily_abundance), .groups = "drop") %>%
+  group_by(Stage) %>%
+  slice_max(mean_abundance, n = 10) %>%
+  arrange(Stage, desc(mean_abundance))
+
+print(top_phyla_by_stage)
+
+
+```
+#Looking at interesting phyla in stage V: found Gracilibacteria
+```{r}
+# Make sure Stage is already defined (you likely did this earlier)
+# Now filter and summarize Patescibacteria data for Stage V
+
+stageV_patesci <- table_rel %>%
+  filter(Stage == "V", Phylum == "Patescibacteria") %>%
+  group_by(Genus) %>%
+  summarise(mean_abundance = mean(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(mean_abundance))
+
+# View the result
+print(stageV_patesci)
+
+```
+
+
+```{r}
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+library(dplyr)
+
+phylum_stage_summary <- table_rel %>%
+  filter(!is.na(Stage)) %>%
+  group_by(Stage, Phylum, day) %>%
+  summarise(daily_ab = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Stage, Phylum) %>%
+  summarise(mean_ab = mean(daily_ab), .groups = "drop")
+
+mean_ab_total <- phylum_stage_summary %>%
+  group_by(Phylum) %>%
+  summarise(overall_mean = mean(mean_ab, na.rm = TRUE))
+
+low_abundance_phyla <- mean_ab_total %>%
+  filter(overall_mean < 0.8) %>%
+  pull(Phylum)
+
+phylum_stage_summary <- phylum_stage_summary %>%
+  mutate(Phylum = ifelse(Phylum %in% low_abundance_phyla, "Other", Phylum))
+phylum_stage_summary <- phylum_stage_summary %>%
+  group_by(Stage, Phylum) %>%
+  summarise(mean_ab = sum(mean_ab), .groups = "drop")
+phylum_stage_summary$Stage <- factor(phylum_stage_summary$Stage,
+                                     levels = c("Acclimation", "I", "II", "III", "IV", "V"))
+
+# 1. Reverse stacking order (so Proteobacteria is plotted first = bottom of bar)
+stack_order <- c("Other", "Acidobacteriota", "Chloroflexi", 
+                 "Actinobacteriota", "Bacteroidota", "Proteobacteria")
+
+# 2. Set factor levels for stacking
+phylum_stage_summary$Phylum <- factor(phylum_stage_summary$Phylum,
+                                      levels = stack_order)
+
+# 3. Define colors
+phylum_colors <- c(
+  "Proteobacteria"   = "#8B0000",   # deep red
+  "Bacteroidota"     = "#228B22",   # deep green
+  "Actinobacteriota" = "#0000CD",   # medium blue
+  "Chloroflexi"      = "#00008B",   # dark blue
+  "Acidobacteriota"  = "#FF8C00",   # orange
+  "Other"            = "grey50"
+)
+
+# 4. Plot
+ggplot(phylum_stage_summary, aes(x = Stage, y = mean_ab, fill = Phylum)) +
+  geom_bar(stat = "identity", position = "fill") +
+  coord_flip() +
+  scale_y_continuous(expand = c(0, 0), labels = scales::percent) +
+  scale_fill_manual(values = phylum_colors, drop = FALSE) +
+  guides(fill = guide_legend(reverse = TRUE)) +  # ⬅️ Reverses legend only
+  labs(x = NULL, y = "Relative Abundance", fill = "Phylum") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12),
+        legend.position = "right")
+
+#ggsave("C:/DOE_EERE_b1052_new/grapths/Phylum_abundance.png", 
+#      width = 8, height = 4, dpi = 300)
+
+```
+#Genus within Proteobacteria
+```{r}
+# Filter data for "Proteobacteria" and summarize abundance by Genus
+Proteobacteria_genus_table <- table_rel %>%
+  filter(Phylum == "Proteobacteria") %>%    # Focus on Proteobacteria
+  group_by(Genus, SRT) %>%                  # Group by Genus and SRT
+  summarise(total_abundance = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  arrange(SRT, desc(total_abundance))       # Sort by SRT and abundance
+
+# Print the table
+print(Proteobacteria_genus_table)
+
+
+```
+#Generte table with PAO/GAO/OD/OHO genus abundance
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)  # for write_csv()
+
+# 1. Define the exact genus order you want
+target_genera <- c("Ca_Accumulibacter", "Dechloromonas", 
+                   "Ca_Competibacter", "Defluviicoccus", 
+                   "Thauera", "Zoogloea", "Denitratisoma", "Simplicispira", 
+                   "Dokdonella", "Arenimonas", "Pseudoxanthomonas", 
+                   "Hydrogenophaga", "midas_g_41804", "Lysobacter", 
+                   "midas_g_171", "midas_g_31688", "midas_g_461", 
+                   "midas_g_71310", "Flavobacterium", "Cloacibacterium", 
+                   "Lacihabitans", "Terrimonas")
+
+# 2. Assign Stage if not done already
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# 3. Aggregate relative abundance by Genus and Stage
+abundance_table <- table_rel %>%
+  filter(Genus %in% target_genera, !is.na(Stage)) %>%
+  group_by(Genus, day, Stage) %>%
+  summarise(daily_abundance = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Genus, Stage) %>%
+  summarise(mean_abundance = mean(daily_abundance), .groups = "drop") %>%
+  mutate(Genus = factor(Genus, levels = target_genera)) %>%
+  arrange(Genus) %>%
+  pivot_wider(names_from = Stage, values_from = mean_abundance, values_fill = 0)
+
+# 4. View the table
+print(abundance_table)
+
+# 5. Save as .csv for Excel coloring or sharing
+write_csv(abundance_table, "C:/DOE_EERE_b1052_new/Tables/PAOGAOODOHOgenus_stage_abundance.csv")
+```
+#Generte table with by classs:
+```{r}
+# Define your target genera list
+target_genera <- c("Ca_Accumulibacter", "Dechloromonas", 
+                   "Ca_Competibacter", "Defluviicoccus", 
+                   "Thauera", "Zoogloea", "Denitratisoma", "Simplicispira", 
+                   "Dokdonella", "Arenimonas", "Pseudoxanthomonas", 
+                   "Hydrogenophaga", "midas_g_41804", "Lysobacter", 
+                   "midas_g_171", "midas_g_31688", "midas_g_461", 
+                   "midas_g_71310", "Flavobacterium", "Cloacibacterium", 
+                   "Lacihabitans", "Terrimonas")
+
+# Filter the table for target genera and get unique Phylum-Genus pairs
+class_lookup <- table_rel %>%
+  filter(Genus %in% target_genera) %>%
+  distinct(Genus, Class) %>%
+  arrange(factor(Genus, levels = target_genera))
+
+# View result
+print(class_lookup)
+```
+
+
+
+```{r}
+# Define the desired order of SRT
+desired_order <- c("0-20", "21-40", "41-60", "61-80", "81-100", 
+                   "101-120", "121-140", "141-160", "161-180", "181-200","201-220", "221-240", "241-260", "261-280", "281-300","301-320","321-340","341-360","361-380","381-400","401-420","421-440","441-460","461-480")
+
+
+# Top 10 Genera to focus on
+top10_genera <- c("Ca_Competibacter", "Thauera", "Zoogloea", "Ca_Accumulibacter", 
+                  "Pseudoxanthomonas", "Simplicispira", "Dokdonella", 
+                  "Hydrogenophaga", "Arenimonas", "Paracoccus", "Dechloromonas", "Defluviicoccus","Rhodobacter", "Denitratisoma","Lysobacter")
+
+
+# Convert SRT to a factor with the specified levels
+table_rel$SRT <- factor(table_rel$SRT, levels = desired_order)
+
+
+# Step 1: Calculate mean abundance for each Genus in each SRT
+Proteobacteria_top10_mean <- table_rel %>%
+  filter(Phylum == "Proteobacteria", Genus %in% top10_genera) %>% # Filter for Proteobacteria and top 10 Genera
+  group_by(Genus, day, SRT) %>%          # Group by Genus, day, and SRT
+  summarise(sum = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%  # Sum rel_ab within each day
+  group_by(Genus, SRT) %>%               # Group by Genus and SRT
+  summarise(mean_abundance = mean(sum, na.rm = TRUE), .groups = "drop") %>% # Calculate mean abundance across days
+  arrange(SRT, desc(mean_abundance))     # Sort for clarity
+
+# Print the table
+print(Proteobacteria_top10_mean)
+
+
+# Plot the mean abundance for top 10 Genera in Proteobacteria
+genus_plot <- ggplot(Proteobacteria_top10_mean, aes(x = SRT, y = mean_abundance, fill = Genus)) +
+  geom_col(position = "stack") +                           # Stacked bar chart
+  labs(y = "Mean Relative Abundance", x = "Days", fill = "Genus") +
+  theme_classic() +
+  scale_fill_paletteer_d("ggthemes::Tableau_20")+                  
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+#  ggtitle("Mean Relative Abundance of Known Genera in Proteobacteria Across SRTs")+
+  annotate("text", x = 3.25, y = 105, label = "Acclimation", color = "red") +
+  annotate("text", x = 8.25, y = 105, label = "I", color = "red") +
+  annotate("text", x = 11, y = 105, label = "II", color = "red") +
+  annotate("text", x = 13.75, y = 105, label = "III", color = "red") +
+  annotate("text", x = 17.25, y = 105, label = "IV", color = "red") +
+  annotate("text", x = 21.5, y = 105, label = "V", color = "red") +
+  geom_vline(xintercept = c(6.5, 10, 12, 15.5,19,24), color = "grey", linetype = "dashed") +
+  theme(legend.position = "right")
+
+# Print the plot
+print(genus_plot)
+
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(paletteer)
+
+# 1. Assign stages
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# 2. Define top genera (you want these colorful)
+top_genera <- c("Ca_Competibacter", "Thauera", "Zoogloea", "Ca_Accumulibacter", 
+                "Pseudoxanthomonas", "Simplicispira", "Dokdonella", 
+                "Hydrogenophaga", "Arenimonas", "Paracoccus", "Dechloromonas", 
+                "Defluviicoccus","Rhodobacter", "Denitratisoma","Lysobacter")
+
+# 3. Group others and summarize
+plot_data_stage <- table_rel %>%
+  filter(!is.na(Stage)) %>%
+  mutate(Genus_grouped = ifelse(Genus %in% top_genera, Genus, "Others")) %>%
+  group_by(Genus_grouped, day, Stage) %>%
+  summarise(sum = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Genus_grouped, Stage) %>%
+  summarise(mean_abundance = mean(sum), .groups = "drop")
+
+# 4. Set factor levels to keep your genus order
+plot_data_stage$Genus_grouped <- factor(plot_data_stage$Genus_grouped,
+                                        levels = rev(c(top_genera, "Others")))
+
+# 5. Set colors (15 colorful + grey for "Others")
+color_vec <- c(
+  paletteer_d("ggthemes::Tableau_20")[1:16])
+
+
+#5.5 Create display names as expressions for italics
+genus_labels <- c(
+  setNames(
+    lapply(top_genera, function(x) bquote(italic(.(x)))),
+    top_genera
+  ),
+  Others = "Others"  # leave Others non-italic
+)
+
+# 2. Update scale_fill_manual
+scale_fill_manual(
+  values = color_vec,
+  labels = genus_labels,
+  guide = guide_legend(
+    override.aes = list(size = 4)  # optional: tweak size in legend
+  )
+)
+
+
+# 6. Plot: normalized bar (100% stacked)
+ggplot(plot_data_stage, aes(x = Stage, y = mean_abundance, fill = Genus_grouped)) +
+  geom_col(position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(y = "Relative Abundance [%]", x = "Experimental Stage", fill = "Genus") +
+  scale_fill_manual(
+    values = color_vec,
+    labels = genus_labels,
+    guide = guide_legend(override.aes = list(size = 4))
+  ) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 0),
+        legend.position = "right")
+
+ggsave("C:/DOE_EERE_b1052_new/grapths/Relative_abundance.png", 
+       width = 8, height = 6, dpi = 300)
+
+```
+
+
+```{r}
+
+
+# Define the desired order of SRT
+desired_order <- c("0-20", "21-40", "41-60", "61-80", "81-100", 
+                   "101-120", "121-140", "141-160", "161-180", "181-200","201-220", "221-240", "241-260", "261-280", "281-300","301-320","321-340","341-360","361-380","381-400","401-420","421-440","441-460","461-480")
+
+# Convert SRT to a factor with the specified levels
+table_rel$SRT <- factor(table_rel$SRT, levels = desired_order)
+
+# Calculate mean_sum for each Genus within the same SRT
+genus_mean_sum <- table_rel %>%
+  group_by(Genus, day, SRT) %>%  # group by the finest variable
+  summarise(sum = sum(rel_ab, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(Genus, SRT) %>%
+  summarise(mean_sum = mean(sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# Filter and plot
+SRT_data <- genus_mean_sum %>%
+  filter(Genus %in% c("Ca_Accumulibacter", "Tetrasphaera", "Dechloromonas", 
+                      "Ca_Obscuribacter", "Halomonas", "Ca_Competibacter",
+                      "Defluviicoccus", "Ca_Contendobacter", "Propionivibrio", 
+                      "Micropruina", "Dokdonella", "Thauera", "Taibaiella", 
+                      "Zoogloea")) %>%
+  mutate(Genus = factor(Genus, levels = c("Ca_Accumulibacter", "Ca_Obscuribacter",
+                                          "Dechloromonas", "Tetrasphaera", "Halomonas",  
+                                          "Ca_Competibacter", "Ca_Contendobacter",
+                                          "Defluviicoccus", "Micropruina",
+                                          "Propionivibrio", "Dokdonella", "Thauera", 
+                                          "Taibaiella", "Zoogloea")))
+
+# Plot with the new SRT_bins
+ggplot(data = SRT_data, aes(x = SRT, y = mean_sum, fill = Genus)) +
+  labs(y = "avg relative abundance", x = "days") +
+  geom_col(position = "stack") +
+  theme_classic() +
+  scale_fill +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+  annotate("text", x = 3.25, y = 105, label = "Acclimation", color = "red") +
+  annotate("text", x = 8.25, y = 105, label = "I", color = "red") +
+  annotate("text", x = 11, y = 105, label = "II", color = "red") +
+  annotate("text", x = 13.75, y = 105, label = "III", color = "red") +
+  annotate("text", x = 17.25, y = 105, label = "IV", color = "red") +
+  annotate("text", x = 21.5, y = 105, label = "V", color = "red") +
+  geom_vline(xintercept = c(6.5, 10, 12, 15.5,19,24), color = "grey", linetype = "dashed") +
+  theme(legend.position = "right")
+
+# Print the plot
+print(SRT_data)
+
+
+```
+Boxplot
+Creating genus total abundance dataset = summary table with performance 
+```{r}
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# Summarize relative abundance per Genus per day and Stage
+genus_sum <- table_rel %>%
+  group_by(Genus, day, Stage, SRT) %>%
+  summarise(sum = sum(rel_ab, na.rm = TRUE), .groups = "drop")
+
+# Target genera
+target_genera <- c("Ca_Competibacter", "Thauera", "Zoogloea", "Ca_Accumulibacter", 
+                   "Pseudoxanthomonas", "Simplicispira", "Dokdonella", 
+                   "Hydrogenophaga", "Arenimonas", "Paracoccus", "Dechloromonas", 
+                   "Defluviicoccus", "Rhodobacter", "Denitratisoma", "Lysobacter")
+
+boxplot <- genus_sum %>%
+  filter(Genus %in% target_genera) %>%
+  ggplot(aes(x = Stage, y = sum, fill = Genus)) +
+  facet_wrap(~Genus, scales = "free", nrow = 4) +
+  geom_boxplot(outlier.colour = NA) +
+  geom_jitter(alpha = 0.6, width = 0.2, size = 1) +
+  labs(y = "Relative abundance [%]", x = "Stage") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+
+# Print it
+print(boxplot)
+```
+
+
+
+```{r}
+# Load required packages
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(forcats)
+library(patchwork)
+
+# ----- 1. Define functional groupings -----
+PAOs <- c("Ca_Accumulibacter", "Dechloromonas")
+GAOs <- c("Ca_Competibacter", "Defluviicoccus", "Dokdonella", "Simplicispira")
+OHOs <- c("Thauera", "Zoogloea", "Pseudoxanthomonas", "Hydrogenophaga",
+          "Arenimonas", "Paracoccus", "Rhodobacter", "Denitratisoma", "Lysobacter")
+
+# ----- 2. Tag Genus with functional group -----
+table_rel <- table_rel %>%
+  mutate(Group = case_when(
+    Genus %in% PAOs ~ "PAO",
+    Genus %in% GAOs ~ "GAO",
+    Genus %in% OHOs ~ "OHO",
+    TRUE ~ NA_character_
+  ))
+
+# ----- 3. Calculate genus-level mean abundance per stage -----
+heatmap_data <- table_rel %>%
+  filter(!is.na(Stage), !is.na(Group)) %>%
+  group_by(Genus, day, Stage, Group) %>%
+  summarise(daily_sum = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Genus, Stage, Group) %>%
+  summarise(mean_abundance = mean(daily_sum, na.rm = TRUE), .groups = "drop")
+
+# ----- 4. Reorder Genus and Stage factors -----
+heatmap_data$Genus <- factor(heatmap_data$Genus, levels = c(PAOs, GAOs, OHOs))
+heatmap_data$Stage <- factor(heatmap_data$Stage, levels = c("Acclimation", "I", "II", "III", "IV", "V"))
+
+# ----- 5. Get fixed max values per group -----
+max_pao <- max(heatmap_data %>% filter(Group == "PAO") %>% pull(mean_abundance), na.rm = TRUE)
+max_gao <- max(heatmap_data %>% filter(Group == "GAO") %>% pull(mean_abundance), na.rm = TRUE)
+max_oho <- max(heatmap_data %>% filter(Group == "OHO") %>% pull(mean_abundance), na.rm = TRUE)
+
+# ----- 6. Create heatmaps with italic y-axis labels -----
+p1 <- ggplot(heatmap_data %>% filter(Group == "PAO"),
+             aes(x = Stage, y = Genus, fill = mean_abundance)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "navy", limits = c(0, max_pao), name = "Abundance") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic"),
+        legend.position = "bottom") +
+  labs(title = "PAOs", x = NULL, y = NULL)
+
+p2 <- ggplot(heatmap_data %>% filter(Group == "GAO"),
+             aes(x = Stage, y = Genus, fill = mean_abundance)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "darkorange", limits = c(0, max_gao), name = "Abundance") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic"),
+        legend.position = "bottom") +
+  labs(title = "GAOs", x = NULL, y = NULL)
+
+p3 <- ggplot(heatmap_data %>% filter(Group == "OHO"),
+             aes(x = Stage, y = Genus, fill = mean_abundance)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "darkgreen", limits = c(0, max_oho), name = "Abundance") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic"),
+        legend.position = "bottom") +
+  labs(title = "OHOs", x = "Stage", y = NULL)
+
+# ----- 7. Patch and export -----
+(p1 / p2 / p3) +
+  plot_layout(guides = "collect", heights = c(length(PAOs), length(GAOs), length(OHOs))) &
+  theme(legend.position = "bottom")
+
+# Export the combined plot
+#ggsave("C:/DOE_EERE_b1052_new/grapths/heatmap_PAOs_GAOs_OHOs.pdf", width = 10, height = 6)
+#ggsave("C:/DOE_EERE_b1052_new/grapths/heatmap_PAOs_GAOs_OHOs.png", 
+ #      width = 8, height = 6, dpi = 300)
+
+
+
+```
+mini bar plot
+```{r}
+library(ggbreak)
+library(paletteer)
+
+# Step 1: Assign stages with a defined order
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_  # Ensure any other cases result in NA
+  ))
+
+# Step 2: Define the genera of interest with exact order
+genera <- c("Ca_Accumulibacter", "Dechloromonas", "Ca_Competibacter", "Defluviicoccus", 
+            "Denitratisoma", "Simplicispira", "Dokdonella", "Arenimonas", "Pseudoxanthomonas", 
+            "Flavobacterium", "Thauera", "Zoogloea", "Hydrogenophaga", "Terrimonas", "Cloacibacterium")
+
+# Step 3: Re-order the `Stage` column to ensure correct ordering
+table_rel$Stage <- factor(table_rel$Stage, levels = c("Acclimation", "I", "II", "III", "IV", "V"))
+
+# Step 4: Filter out rows with NA in Stage (do not plot these)
+bacteria_abundance <- table_rel %>%
+  filter(Genus %in% genera, !is.na(Stage)) %>%
+  group_by(Genus, day, Stage) %>%
+  summarise(daily_abundance = sum(rel_ab, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Genus, Stage) %>%
+  summarise(mean_abundance = mean(daily_abundance), .groups = "drop") %>%
+  mutate(Genus = factor(Genus, levels = genera)) %>%
+  arrange(match(Genus, genera), Stage)
+
+# Step 5: Set the factor levels for Genus to ensure the specified order on the X-axis
+#bacteria_abundance$Genus <- factor(bacteria_abundance$Genus, levels = genera)
+
+# Step 6: Create the bar plot with genera on the X-axis and colored by Stage
+bacteria_plot <- ggplot(bacteria_abundance, aes(x = Genus, y = mean_abundance, fill = Stage)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(y = "Mean Relative Abundance", x = "Genus", fill = "Stage") +
+  theme_classic() +
+  scale_fill_paletteer_d("ggthemes::Tableau_20") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(legend.position = "right") +
+  scale_y_break(c(15, 25), scales = 0.5)  # <- BREAK here                                          # Position legend
+
+# Print the plot
+print(bacteria_plot)
+
+
+
+
+```
+
+
+#bray-curtis plot 
+
+```{r}
+
+# --- 0) Start from your filtered relative-abundance object ---
+# ps_rel from your code
+
+# --- 1) Find the stage column in sample_data (robust finder) ---
+sd <- as.data.frame(sample_data(ps_rel))
+cand_cols <- grep("stage|phase|Stage|Phase", colnames(sd), value = TRUE)
+
+# helper to see which candidate holds I..V
+pick_stage_col <- function(df, cols) {
+  lv <- c("I","II","III","IV","V")
+  for (c in cols) {
+    v <- toupper(trimws(as.character(df[[c]])))
+    if (any(v %in% lv)) return(c)
+  }
+  return(NA_character_)
+}
+
+stage_col <- pick_stage_col(sd, cand_cols)
+
+if (is.na(stage_col)) {
+  stop("Could not find a stage/phase column with values in {I, II, III, IV, V}. 
+Check your metadata column names and content in sample_data(ps_rel).")
+}
+
+# create a clean ordered factor in sample_data
+sd$StageFactor <- factor(
+  toupper(trimws(as.character(sd[[stage_col]]))),
+  levels = c("I","II","III","IV","V")
+)
+
+# put it back into phyloseq
+sample_data(ps_rel)$StageFactor <- sd$StageFactor
+
+# --- 2) computer the bray-curtis NMDS on Bray–Curtis directly from phyloseq ---
+set.seed(123)
+ord <- ordinate(ps_rel, method = "NMDS", distance = "bray", trymax = 100)
+
+# data frame for ggplot
+ord_df <- plot_ordination(ps_rel, ord, color = "StageFactor", justDF = TRUE) %>%
+  filter(!is.na(StageFactor))  # drop samples without stage
+
+# --- 3) Plot ---(default 1-SD ellipse that shows scatter spread)
+# p <- ggplot(ord_df, aes(NMDS1, NMDS2, color = StageFactor)) +
+#   geom_point(size = 3, alpha = 0.9) +
+#   stat_ellipse(aes(group = StageFactor), linetype = 2) +
+#   stat_summary(aes(group = StageFactor), fun = mean, geom = "point", size = 4, shape = 4) +
+#   scale_color_manual(values = paletteer::paletteer_d("ggthemes::Tableau_20")[1:5]) +
+#   theme_bw(base_size = 12) +
+#   labs(
+#     title = "NMDS (Bray–Curtis): Stages I–V",
+#     subtitle = paste0("Stress = ", round(ord$stress, 3)),
+#     x = "NMDS1", y = "NMDS2", color = "Stage"
+#   )
+# 
+
+#95% confidence ellipse
+# 
+#   # colored centroids
+#   stat_summary(aes(group = StageFactor, color = StageFactor),
+#                fun = mean, geom = "point", size = 2.5, shape = 4, stroke = 0.9,
+#                show.legend = FALSE) +
+
+
+library(grid)  # for unit()
+
+p <- ggplot(ord_df, aes(NMDS1, NMDS2, color = StageFactor, shape = StageFactor)) +
+  geom_point(size = 2, alpha = 0.9, stroke = 1) +
+  stat_ellipse(aes(group = StageFactor), type = "t", level = 0.95, linetype = 2) +
+  
+  # stress label: fixed at top-right corner
+  annotation_custom(
+    grid::textGrob(
+      label = paste0("2D Stress = ", round(ord$stress, 3)),
+      x = unit(0.98, "npc"), y = unit(0.98, "npc"),  # push near top-right
+      hjust = 1, vjust = 1, gp = gpar(fontsize = 11)
+    )
+  ) +
+
+  scale_color_manual(values = paletteer::paletteer_d("ggthemes::Tableau_20")[1:5]) +
+  scale_shape_manual(values = c(16, 17, 15, 18, 6)) +
+  
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position   = c(0.15, 0.8),
+    legend.background = element_blank(),
+    legend.key        = element_blank(),
+    legend.title      = element_blank(),
+    legend.direction  = "vertical"
+  ) +
+  labs(
+    title = "NMDS (Bray–Curtis): Stages I–V",
+    x = "NMDS1", y = "NMDS2"
+  )
+
+print(p)
+
+ggsave("C:/DOE_EERE_b1052_new/grapths/NMDS_Stages_ItoV.png",
+       p, width = 8, height = 4.5, dpi = 300)
+
+```
+#find the outliers or furthest located in the bray-curtis
+```{r}
+# find Stage V samples
+stageV_df <- ord_df %>% filter(StageFactor == "V")
+
+# check distances from Stage V centroid
+centroid <- colMeans(stageV_df[, c("NMDS1","NMDS2")])
+stageV_df <- stageV_df %>%
+  mutate(dist_from_centroid = sqrt((NMDS1 - centroid[1])^2 + (NMDS2 - centroid[2])^2)) %>%
+  arrange(desc(dist_from_centroid))
+
+head(stageV_df, 10)   # will show the most outlying Stage V samples- (in that order, most → less outlying among the top 5).
+```
+High DO vs low DO 
+##adds new row of DO to metadata file !
+
+
+```{r}
+## 1) Build a clean DO_group factor from your metadata
+md <- as(sample_data(ps_rel), "data.frame")
+
+# normalize text just in case
+md$DO <- tolower(trimws(as.character(md$DO)))
+
+# High vs Low only; treat "no" (Acclimation) as NA so it is excluded
+md$DO_group <- ifelse(md$DO == "high", "High DO",
+                 ifelse(md$DO == "low",  "Low DO", NA))
+# write back to the phyloseq object
+sample_data(ps_rel)$DO_group <- factor(md$DO_group, levels = c("High DO","Low DO"))
+
+## 2) Keep only samples with High/Low (drop "no")
+ps_do <- prune_samples(!is.na(sample_data(ps_rel)$DO_group), ps_rel)
+ps_do <- prune_taxa(taxa_sums(ps_do) > 0, ps_do)
+
+## 3) Ordinate (Bray–Curtis NMDS)
+set.seed(123)
+ord2 <- ordinate(ps_do, method = "NMDS", distance = "bray", trymax = 100)
+
+ord_df <- plot_ordination(ps_do, ord2, color = "DO_group", justDF = TRUE)
+
+```
+```{r}
+## 4) PERMANOVA (labels aligned to the distance object)
+bray <- phyloseq::distance(ps_do, method = "bray")
+meta <- as(sample_data(ps_do), "data.frame")
+labs <- attr(bray, "Labels")
+meta <- meta[match(labs, rownames(meta)), , drop = FALSE]
+
+set.seed(123)
+permanova_DO <- adonis2(as.matrix(bray) ~ DO_group, data = meta, permutations = 999)
+pval <- signif(permanova_DO$`Pr(>F)`[1], 3)
+R2   <- round(permanova_DO$R2[1], 3)
+## 5) Plot
+ord_df$DO_group <- factor(ord_df$DO_group, levels = c("High DO","Low DO"))
+
+p2 <- ggplot(ord_df, aes(NMDS1, NMDS2, color = DO_group, shape = DO_group)) +
+  geom_point(size = 2.5, alpha = 0.9, stroke = 1) +
+  stat_ellipse(aes(group = DO_group), type = "t", level = 0.95, linetype = 2) +
+  annotation_custom(
+    grid::textGrob(
+      label = paste0("2D Stress = ", round(ord2$stress, 3)),
+      x = unit(0.98, "npc"), y = unit(0.98, "npc"),
+      hjust = 1, vjust = 1, gp = gpar(fontsize = 11)
+    )
+  ) +
+  scale_color_manual(values = c("High DO" = "#1f77b4", "Low DO" = "#ff7f0e")) +
+  scale_shape_manual(values = c("High DO" = 16, "Low DO" = 17)) +
+  coord_equal() +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position   = c(0.15, 0.80),
+    legend.background = element_blank(),
+    legend.title      = element_blank()
+  ) +
+  labs(
+    title    = "NMDS (Bray–Curtis): High DO (I–III) vs Low DO (IV–V)",
+    subtitle = paste0("PERMANOVA: p = ", pval, ", R² = ", R2),
+    x = "NMDS1", y = "NMDS2"
+  )
+#Recommended for publication
+p2 <- p2 + coord_cartesian(expand = TRUE)
+print (p2)
+# ggsave("C:/DOE_EERE_b1052_new/grapths/NMDS_DOgroups.png",
+#        plot = p2, width = 6, height = 4, dpi = 300)
+
+```
+
+```{r}
+# get relative abundances for just outliers
+outlier_samples <- c("B60","B59","B55")
+otu_outliers <- prune_samples(sample_names(ps_rel) %in% outlier_samples, ps_rel)
+
+# get "normal" Stage V
+normal_samples <- setdiff(sample_names(ps_rel)[sample_data(ps_rel)$StageFactor == "V"], outlier_samples)
+otu_normal <- prune_samples(sample_names(ps_rel) %in% normal_samples, ps_rel)
+
+# relative abundance summary by family/genus
+ps_rel_tax <- tax_glom(ps_rel, taxrank = "Genus")
+plot_bar(prune_samples(outlier_samples, ps_rel_tax), fill = "Genus")
+```
+
+#HIgh DO vs low DO abundance table
+```{r}
+
+# 1) Keep only samples labeled high/low DO in your metadata
+do_tbl <- table_rel %>%
+  mutate(
+    DO = tolower(trimws(DO)),                # your new column from metadata
+    DO_group = ifelse(DO == "high", "High DO",
+               ifelse(DO == "low",  "Low DO", NA_character_))
+  ) %>%
+  filter(!is.na(DO_group)) %>%
+  mutate(rel_ab = as.numeric(rel_ab))        # ensure numeric (%)
+
+# 2) Compute mean & SD per Genus and DO group
+genus_stats <- do_tbl %>%
+  filter(!is.na(Genus) & Genus != "") %>%
+  group_by(DO_group, Genus) %>%
+  summarise(
+    mean_abundance = mean(rel_ab, na.rm = TRUE),
+    sd_abundance   = sd(rel_ab, na.rm = TRUE),
+    n              = dplyr::n(),
+    .groups = "drop"
+  )
+
+# 3) Pick top 10 genera by overall mean abundance (across both groups)
+top10 <- genus_stats %>%
+  group_by(Genus) %>%
+  summarise(overall_mean = mean(mean_abundance), .groups = "drop") %>%
+  arrange(desc(overall_mean)) %>%
+  slice_head(n = 10) %>%
+  pull(Genus)
+
+genus_top10 <- genus_stats %>%
+  filter(Genus %in% top10) %>%
+  arrange(DO_group, desc(mean_abundance))
+
+# 4) Show the table
+genus_top10
+# If you want a wide table: one row per Genus with High/Low columns
+genus_top10_wide <- genus_top10 %>%
+  select(DO_group, Genus, mean_abundance, sd_abundance) %>%
+  pivot_wider(
+    names_from = DO_group,
+    values_from = c(mean_abundance, sd_abundance),
+    names_sep = "."
+  ) %>%
+  arrange(desc(pmax(`mean_abundance.High DO`, `mean_abundance.Low DO`, na.rm = TRUE)))
+
+genus_top10_wide
+
+# 5) (Optional) Save CSV
+write.csv(genus_top10_wide,
+          "C:/DOE_EERE_b1052_new/grapths/Top10_Genera_HighVsLowDO_mean_sd.csv",
+          row.names = FALSE)
+
+# 6) (Optional) Plot: grouped bars with SD error bars
+p_top10 <- genus_top10 %>%
+  mutate(Genus = factor(Genus,
+                        levels = genus_top10 %>%
+                          group_by(Genus) %>%
+                          summarise(m = mean(mean_abundance)) %>%
+                          arrange(desc(m)) %>% pull(Genus))) %>%
+  ggplot(aes(Genus, mean_abundance, fill = DO_group)) +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance,
+                    ymax = mean_abundance + sd_abundance),
+                width = 0.2, position = position_dodge(width = 0.85)) +
+  labs(title = "Top 10 most abundant genera: High DO vs Low DO",
+       x = "Genus", y = "Relative abundance (%)", fill = "DO group") +
+  theme_bw(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p_top10)
+
+# Save plot
+ggsave("C:/DOE_EERE_b1052_new/grapths/Top10_Genera_HighVsLowDO.png",
+       p_top10, width = 9, height = 5, dpi = 300)
+
+```
+
+#Quick comparison between anosim, permanova, 
+```{r}
+# ---- 1) Build a clean DO_group from your metadata (do NOT modify ps_rel) ----
+sd <- as(sample_data(ps_rel), "data.frame")
+
+# Map your DO column to two groups; drop "no" or other values
+sd$DO_group <- case_when(
+  tolower(sd$DO) == "high" ~ "High DO",
+  tolower(sd$DO) == "low"  ~ "Low DO",
+  TRUE ~ NA_character_
+)
+
+keep_samples <- rownames(sd)[!is.na(sd$DO_group)]
+ps_do <- prune_samples(keep_samples, ps_rel)
+
+# carry the factor into the pruned object in a safe way
+tmp <- as(sample_data(ps_do), "data.frame")
+tmp$DO_group <- factor(sd[rownames(tmp), "DO_group"], levels = c("High DO","Low DO"))
+sample_data(ps_do)$DO_group <- tmp$DO_group
+
+# ---- 2) Bray–Curtis distances ----
+bray <- phyloseq::distance(ps_do, method = "bray")
+meta <- as(sample_data(ps_do), "data.frame")
+
+# ---- 3) PERMANOVA (adonis2) ----
+set.seed(123)
+permanova_DO <- adonis2(bray ~ DO_group, data = meta, permutations = 999)
+
+# Extract useful numbers for captions
+pval_perm <- permanova_DO$`Pr(>F)`[1]
+R2_perm   <- permanova_DO$R2[1]
+F_perm    <- permanova_DO$F[1]
+
+cat(sprintf("PERMANOVA  →  F = %.2f, R² = %.3f, p = %.3f\n", F_perm, R2_perm, pval_perm))
+
+# ---- 4) ANOSIM (rank-based separation of within vs between distances) ----
+anosim_DO <- anosim(as.matrix(bray), grouping = meta$DO_group, permutations = 999)
+
+R_anosim <- as.numeric(anosim_DO$statistic)
+p_anosim <- as.numeric(anosim_DO$signif)
+
+cat(sprintf("ANOSIM      →  R = %.3f, p = %.3f\n", R_anosim, p_anosim))
+
+# ---- 5) Homogeneity of multivariate dispersion (betadisper) ----
+bd <- betadisper(bray, group = meta$DO_group)         # distances to group centroid
+bd_test <- permutest(bd, permutations = 999)          # permuted test for equal dispersions
+
+# pull F and p for quick reporting
+F_bd <- bd_test$tab[1, "F"]
+p_bd <- bd_test$tab[1, "Pr(>F)"]
+
+cat(sprintf("betadisper  →  F = %.2f, p = %.3f (test of equal within-group dispersion)\n", F_bd, p_bd))
+
+# ---- 6) Optional: visualize dispersion differences (ggplot boxplot) ----
+disp_df <- data.frame(
+  DO_group = meta$DO_group,
+  distance_to_centroid = bd$distances
+)
+
+ggplot(disp_df, aes(DO_group, distance_to_centroid, fill = DO_group)) +
+  geom_boxplot(width = 0.6, alpha = 0.8, outlier.shape = 21) +
+  scale_fill_manual(values = c("High DO" = "#1f77b4", "Low DO" = "#ff7f0e")) +
+  labs(
+    title = "Within-group dispersion (Bray–Curtis)",
+    subtitle = sprintf("betadisper: F = %.2f, p = %.3f", F_bd, p_bd),
+    x = NULL, y = "Distance to group centroid"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+```
+
+
+
+rarefy-even depth
+
+```{r}
+#rarefy to minimum depth across your samples
+rarefy_level <- min(sample_sums(ps_filt))
+#save as physeq2 
+physeq2 <-rarefy_even_depth(ps_filt, rarefy_level,
+  rngseed = 7, replace = TRUE, trimOTUs = TRUE, verbose = TRUE)
+```
+##Wilcoxon Rank-Sum Tests Across Stages for Selected Genera
+
+```{r}
+library(dplyr)
+library(rstatix)
+
+# 1. Define the stages (already applied)
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# 2. Define target genera
+top_genera <- c("Ca_Competibacter", "Thauera", "Zoogloea", "Ca_Accumulibacter", 
+                "Pseudoxanthomonas", "Simplicispira", "Dokdonella", 
+                "Hydrogenophaga", "Arenimonas", "Paracoccus", "Dechloromonas", 
+                "Defluviicoccus","Rhodobacter", "Denitratisoma","Lysobacter")
+
+# 3. Summarize relative abundance per day per Genus per Stage
+genus_sum <- table_rel %>%
+  filter(Genus %in% top_genera, !is.na(Stage)) %>%
+  group_by(Genus, Stage, day) %>%
+  summarise(sum = sum(rel_ab, na.rm = TRUE), .groups = "drop")
+
+# 4. Wilcoxon rank-sum test for all pairwise stage comparisons per Genus
+pairwise_results <- genus_sum %>%
+  group_by(Genus) %>%
+  wilcox_test(sum ~ Stage, p.adjust.method = "fdr") %>%
+  add_significance("p.adj") %>%
+  arrange(Genus, group1, group2)
+
+# 5. Display the results
+print(pairwise_results)
+
+#6. save file to path
+write.csv(pairwise_results, "C:/DOE_EERE_b1052_new/Tables/Wilcoxon_Genus_Stage_Comparisons.csv", row.names = FALSE)
+
+
+```
+
+
+
+
+
+##Wilcoxon rank sum
+```{r}
+# 1. Define stages (already done in your data)
+table_rel <- table_rel %>%
+  mutate(Stage = case_when(
+    day >= 0   & day <= 10   ~ "Acclimation",
+    day >= 175 & day <= 185  ~ "I",
+    day >= 219 & day <= 230  ~ "II",
+    day >= 285 & day <= 308  ~ "III",
+    day >= 370 & day <= 395  ~ "IV",
+    day >= 440 & day <= 462  ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# 2. Define genera of interest
+top_genera <- c("Ca_Competibacter", "Thauera", "Zoogloea", "Ca_Accumulibacter", 
+                "Pseudoxanthomonas", "Simplicispira", "Dokdonella", 
+                "Hydrogenophaga", "Arenimonas", "Paracoccus", "Dechloromonas", 
+                "Defluviicoccus","Rhodobacter", "Denitratisoma","Lysobacter")
+
+# 3. Summarize relative abundance per Genus/day/sample
+genus_sum <- table_rel %>%
+  filter(Genus %in% top_genera, !is.na(Stage)) %>%
+  group_by(Genus, Stage, day) %>%
+  summarise(sum = sum(rel_ab, na.rm = TRUE), .groups = "drop")
+
+# 4. Define comparisons
+my_comparisons <- list(
+  c("Acclimation","I"),
+  c("Acclimation","II"),
+  c("Acclimation","III"),
+  c("Acclimation","IV"),
+  c("Acclimation","V"),
+  c("I","II"),
+  c("I","III"),
+  c("II","III"),
+  c("III","IV"),
+  c("IV","V")
+)
+
+# 5. Select relevant genera for phosphorus-related functions
+rel_phos_sum <- genus_sum %>%
+  filter(Genus %in% c("Ca_Accumulibacter", "Dechloromonas", "Tetrasphaera",
+                      "Ca_Competibacter", "Defluviicoccus", "Thauera", "Dokdonella"))
+
+# 6. Plot with Wilcoxon test
+library(ggpubr)
+ggplot(data = rel_phos_sum, aes(x = Stage, y = sum, fill = Genus)) +
+  facet_wrap(~Genus, scales = "free", nrow = 2) +
+  geom_boxplot(outlier.colour = NA) +
+  geom_jitter(alpha = 0.6, width = 0.2, size = 1) +
+  labs(y = "Relative abundance [%]", x = "Stage") +
+  theme_bw() +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    label = "p.signif",
+    vjust = 1.5,
+    hide.ns = TRUE,
+    symnum.args = list(
+      cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+      symbols = c("***", "**", "*", "ns")
+    )
+  )
+
+```
+##Alpha and beta diversity 
+```{r}
+# Alpha and beta diversity
+## ASVs observed
+#Using rarefied data
+observed <- plot_richness(physeq2, x="day", measures=c("Observed"))
+#observe: num of unique ASV
+
+observed_df <- as_tibble(observed$data)
+observed_df$date <- mdy(observed_df$date)
+
+observed_df %>% 
+  #filter(date <= as_date("2021-12-15")) %>%
+ggplot(data=., aes(x=date, y=value, color=Phase, shape=Phase)) +
+  geom_point(size=2.5,alpha=0.8) +
+  theme_classic() +
+  labs(x="Date", y="Number of ASVs observed", title="Richness") +
+  color_basins +
+  shape_basins +
+  scale_x_main +
+  ylim(100,2500) + #adjust the y axis
+  guides(color=guide_legend(title="Phase"), shape=guide_legend(title="Phase"))
+
+
+observed_df %>% 
+ggplot(data=., aes(x=day, y=value, color=Phase, shape=Phase)) +
+  geom_point(size=2.5,alpha=0.8) +
+  theme_classic() +
+  labs(x="Day", y="Number of ASVs observed", title="Richness") +
+  color_basins +
+  shape_basins +
+  phase_lines+
+  ylim(100,2500) + #adjust the y axis
+  guides(color=guide_legend(title="Phase"), shape=guide_legend(title="Phase"))
+
+
+#ggsave(outpath_figures %>% file.path("observedrichness.tiff"),
+#       height=3, width=6, units="in")
+
+observed_df %>%
+  group_by(Phase) %>%
+  summarise(median=median(value), max=max(value))
+
+```
+#Correlations ASV to params
+Correlation of test ASVs to influent/C dosing
+spearman test
+Data read in
+```{r}
+# all performance data in long format for plotting 
+perf_all <- readr::read_csv(
+  "C:/DOE_EERE_b1052_new/performancedata/120724_performanceall.csv",
+  show_col_types = FALSE
+)
+
+#perf_all$date <- as_date(perf_all$date)
+#perf_all <- perf_all %>%
+#  filter(date >= as_date("2021-02-22")) %>%
+#  filter(day <= 84)
+
+```
+
+
+
+```{r}
+
+# Grouping and summarizing the Genus 
+summary_table <- table_rel %>%
+  group_by(sample, date, day, Genus) %>%
+  summarise(sum_abundance = sum(rel_ab, na.rm = TRUE)) %>%
+  ungroup()
+
+# Spreading the data into wide format
+wide_table <- summary_table %>%
+  pivot_wider(names_from = Genus, values_from = sum_abundance, values_fill = list(sum_abundance = 0))
+
+# Display the first few rows of the wide data
+print(wide_table)
+
+```
+
+Filter out genus/target microbacterial groups you are interested in
+```{r}
+# List of genera to keep
+genera_to_keep <- c("Ca_Accumulibacter", "Dechloromonas", "Ca_Obscuribacter","Ca_Competibacter", "Defluviicoccus", "Ca_Contendobacter", "Propionivibrio", "Micropruina","Dokdonella", "Thauera", "Taibaiella", "Zoogloea")
+
+# Selecting relevant columns
+wide_data_selected <- wide_table %>%
+  select(day,date, all_of(genera_to_keep))
+
+# Display the first few rows of the filtered combined data
+head(wide_data_selected)
+
+```
+
+Combine Perfomance data (perf_all) with wide_data_selected; combine by day
+```{r}
+# Joining the wide_table with performance_data based on the day column
+combined_data <- wide_data_selected %>%
+  left_join(perf_all, by = "day")
+
+# Display the first few rows of the combined data
+print(combined_data)
+
+```
+
+#Compute Correlation Matrix with P-values 
+```{r}
+#dbl: number format
+#chr: character 
+# Correlation matrix between all variables
+cor.mat <- combined_data %>% 
+  select(-date.x,-date.y) %>% 
+  cor_mat()
+
+```
+
+
+```{r}
+# Selecting only the numeric columns for the correlation test
+# Exclude non-numeric columns like `date`
+numeric_columns <- combined_data %>%
+  select(where(is.numeric))
+
+# Performing the Spearman correlation test
+spear_test_perf <- cor(numeric_columns, method = "spearman", use = "complete.obs")
+
+# Display the correlation matrix
+spear_test_perf
+
+# save significance matrix
+spear_test_perf_pmat <- cor_pmat(combined_data,method="spearman",exact=F)
+
+# correlation plots
+ggcorrplot(spear_test_perf, p.mat=spear_test_perf_pmat,
+           type="lower", lab="true", sig.level=0.05,
+           insig="blank", colors=c("orangered3","white","lightblue"))
+```
+Extract all the uniques sequences belonging to the Thauera genus
+```{r}
+# Filter the data frame for rows where the genus is "Thauera" and select distinct sequence names
+unique_thauera_seqs <- table_rel %>%
+  filter(Genus == "Thauera") %>%
+  group_by(seq) %>%
+  summarize(total_relative_abundance = sum(rel_ab)) %>%
+  distinct(seq, total_relative_abundance)
+
+# Print the unique sequence names
+print(unique_thauera_seqs)
+
+# Optionally, save the unique sequence names with their relative abundance to a CSV file at the specified path
+write.csv(unique_thauera_seqs, "C:/DOE_EERE_b1052_new/rawreads/unique_thauera_sequences_with_relative_abundance.csv", row.names = FALSE)
+
+```
+
+
+
+Reading in Fasta files: 
+```{r}
+# Read the FASTA file from the specified path
+fasta_file <- readDNAStringSet("C:/DOE_EERE_b1052_new/rawreads/sequences.fasta", format = "fasta")
+
+# Convert the DNAStringSet to a data frame
+fasta_df <- data.frame(
+  name = names(fasta_file),
+  sequence = as.character(fasta_file)
+)
+
+# Specify the unique names of Thauera you want to extract tot of 48
+specific_names <- c("2fbbc9fa65f1c1956a13370876e84b78",
+"ec37f44d5f670f7ae25c22dea25b02e3",				
+"dd6407a912c6fe0b5bedd40ec79da041",				
+"86399b4152e937777cee90ee980e53c7",				
+"38f7934721d5a6bdb95595b2a3c848e3",				
+"9dab2c2557875aa92c1f8a77d6a911eb",				
+"85af453749b8bfa2a4fd6ff0eacfba35",			
+"f0ed97477a279d35bb70076312d60282",			
+"1e138f7e699c3512f4c90b0653edc8a5",			
+"7683d6d6c802eb07021e0eae33b21718",
+"1cbd7b7267b663d1955daf06a0cd3fc2",				
+"a6efdb52a04e05a2a1be52f5516784fa",				
+"a3d82cd1cb098c3f739bb7684c19a57b",				
+"15d74352737177117c80cf7ecd577e12",				
+"c243bf47010b549a9554294a944811f5",				
+"66ed82053d1dcf6757bbf4ece185d612",				
+"ed1bfca51af077146313eee30f693b94",				
+"e29e712a3ec1280011f8a3e601e50b96",				
+"d75692c794f2cd49216eeeaee3d94e32",				
+"b1b15f01b17108e9133db2f1eae6fcfe",
+"861d6f032c280a50fc9195d8d8c02976",				
+"a5c1e91b119656b382aff601cce2111e",				
+"524ea226ae9ed15d6c9027194dfef5fd",				
+"4e3a6a5db39b3cc633ea7e2ec02c04bc",				
+"57b24d9a82f300b8aef4a0b5def0110b",				
+"b343f39b79cbce1c7b232d00dec8b2b9",				
+"3a9e3c0bf6e1335f98cf41d7abbb36f0",				
+"0d7318b1ecac971f030235b4ca635f9e",				
+"8f6c73d31f9f997f8fd90135388043a9",				
+"b9e0f6f1b40ddc614ccc37f9b2c6b93f",
+"185d0eedfd972faf6f7ad8994d2359e5",				
+"c463b7bd57d7c1c9600a96d82d13ae41",				
+"20d2634fd2ea1f2b03315026b3e453a8",				
+"b5d1ebb13e719af9a1b46f4ab63f60e9",				
+"1c00d5f5d8faed40b9bf2845d0d3d6ec",				
+"1fb0ccdafe26096560a30a845f2d7a64",				
+"b1552a83ce94f1c0a8f81ce68f2dbef8",				
+"f75c33f4b0c3047a476c41df2986aa91",				
+"301b4821d79502249c3975022ce86de4",				
+"dd1b82378fad4002f63bb70483aedcd0",
+"b25990b205731331d843c6f26bdbf45a",				
+"928aa2123af53c09ed9af37d4df67c18",				
+"c53db13ab8f36c55e740f33356f80c06",				
+"e0daf8a771513c3a1f4f2eb5828eeb89",				
+"edf13b35fede350c0fbf241074469381",				
+"3a061258eba847446a799d96d2f8d026",				
+"207881bb37b6a63af65a9571d2dcc0a4",				
+"a09bea8a2597d3b5c63c45a916252b7f")
+
+specific_sequences <- fasta_file[names(fasta_file) %in% specific_names]
+
+#convert the DNAstringSet to data frame
+sequences_df <- data.frame(
+    id = names(specific_sequences),
+    sequence = as.character(specific_sequences),
+    stringsAsFactors = FALSE
+)
+
+# Save the data frame to a CSV file:
+write.csv(sequences_df, "C:/DOE_EERE_b1052_new/rawreads/Thauera_sequences.csv", row.names = FALSE)
+
+
+```
+
+Building a phylogeny in R
+```{r}
+# required CRAN
+library(ape)
+library(seqinr)
+library(rentrez)
+library(devtools)
+
+# required Bioconductor
+library(msa)
+
+## GitHub packages
+### requires devtools package and its function install_github()
+library(devtools)
+# devtools::install_github("brouwern/combio4all")
+# devtools::install_github("YuLab-SMU/ggmsa")
+
+
+```
+```{r}
+# Read the FASTA file from the specified path
+fasta_file <- readDNAStringSet("C:/DOE_EERE_b1052_new/rawreads/Thaueradata.txt", format = "fasta")
+num_sequences <- length(fasta_file)
+num_sequences
+summary(fasta_file)
+```
+
+```{r}
+#align the sequences to ensure that homologous positions are compared.
+alignment <-  msa(fasta_file,
+                     method = "ClustalW")
+class(alignment)
+#tweak to the object to make it work with functions from the seqinr package.
+align_seqinr <- msaConvert(alignment, 
+                                   type = "seqinr::alignment")
+```
+
+Displaying an MSA as an R plot (takes long long time to run)
+
+```{r}
+# key step - must have class set properly
+class(alignment) <- "AAMultipleAlignment"
+
+# run ggmsa
+ggmsa::ggmsa(alignment,   # alignment, NOT align_seqinr
+      start = 0, 
+      end = 2100) 
+```
+
+Genetic distances of sequence in subset
+```{r}
+dist <- seqinr::dist.alignment(align_seqinr, 
+                                       matrix = "identity")
+is(dist)
+```
+
+```{r}
+# Note - not using rounded values
+tree_subset <- nj(dist)
+```
+
+
+```{r}
+# plot tree
+#cex size of labels
+#lwd is line width
+
+
+
+# Define the correct file path for the PDF
+file_path <- "C:/DOE_EERE_b1052_new/grapths/phylogenetic_tree.pdf"
+
+# Open a PDF device
+pdf(file_path, width = 12, height = 8)
+
+# Create the plot
+plot.phylo(tree_subset, main = "Phylogenetic Tree", 
+           use.edge.length = TRUE, cex = 1, 
+           x.lim = c(0, 2), y.lim = c(0, Ntip(tree_subset) + 2), lwd = 4)
+
+# Add the label
+mtext(text = "Thauera family gene tree - rooted, with branch lengths")
+
+# Close the PDF device to save the file
+dev.off()
+```
+```{r}
+par(mar = c(5, 5, 5, 5) + 0.1)
+plot.phylo(tree_subset, main = "Phylogenetic Tree", 
+           ,cex = 1.5,
+           use.edge.length = TRUE)
+# add label
+mtext(text = "Thauera family gene tree - rooted, with branch lenths")
+```
+```{r}
+plot.phylo(tree_subset, main = "Phylogenetic Tree", 
+           use.edge.length = TRUE, type = "cladogram")
+
+```
+
+
+
+
+# Subsetting and plotting
+We can use a variety of filtering functions from dplyr to manipulate data for more concise plots. For example, we could select specific bacteria to look for, or group all members of the same family or genus together. Let's do a simple example - we will plot the abundance of the genus Zoogleoa from each sampling location. First, let's see what the data looks like when we filter it to our specifications. 
+```{r}
+#can assign a object (name here is zoogloea) to save filtered data 
+zoogloea=table_rel %>% # perform some functions on table_rel
+  group_by(Genus, date, location) %>% # group at the genus level, we will use this to sum up everything that has the same genus (ignore species)
+  summarise(sum_ab = sum(rel_ab)) %>% # sum up the relative abundance of each unique Genus at each unique combination of date and location
+  filter(Genus == "Zoogloea") 
+  
+
+```
+We can save that table as a new R data frame, or we can pipe that data directly into a ggplot2 command. Notice that the timepoint column is the "character" class rather than a numeric class like a "double" Let's add a modification so the timepoint column is correctly classified.
+
+```{r}
+table_rel %>% # perform some functions on table_rel
+  group_by(Genus, timepoint, location) %>% 
+  summarise(sum_ab = sum(rel_ab)) %>% 
+  filter(Genus == "Zoogloea") %>% 
+  mutate(timepoint = as.numeric(timepoint)) # save timepoint to a numeric class
+
+```
+Next, we can make a simple plot showing the Zoogloea abundance over time. Let's pipe the data directly into the ggplot command.
+
+```{r}
+table_rel %>% # perform some functions on table_rel
+  group_by(Genus, timepoint, location) %>% 
+  summarise(sum_ab = sum(rel_ab)) %>% 
+  filter(Genus == "Zoogloea") %>% 
+  mutate(timepoint = as.numeric(timepoint)) %>% # pipe the data into the next line
+  ggplot(., aes(x = timepoint, y = sum_ab)) + # the period denotes that we want to use the data we piped in
+  geom_point()
+
+```
+
+This plot is okay, but we want to show the Zoogloea abundance from each sampling location, not all together. This is where the long data format comes in handy - we can easily tell ggplot2 that we want to change the aesthetics of the plot based on a column variable, in this case location.
+```{r}
+
+table_rel %>% # perform some functions on table_rel
+  group_by(Genus, timepoint, location) %>% 
+  summarise(sum_ab = sum(rel_ab)) %>% 
+  filter(Genus == "Zoogloea") %>% 
+  mutate(timepoint = as.numeric(timepoint)) %>% # pipe the data into the next line
+  ggplot(., aes(x = timepoint, y = sum_ab, color = location)) + # add color to the aesthetics
+  geom_point()
+
+```
+
+
+
